@@ -1,9 +1,10 @@
 #include <Arduino.h>
+#define gripper 11
 
 int motorOneSpeed = 0;
 int motorTwoSpeed = 0;
 
-//Motor Number, Speed is a percentage between 0 and 1, forward yes no, distance
+//Motor Number, Speed is a percentage between 0 and 1, forward yes no
 void motorSpeedAdjuster (int, float, boolean);
 //stop
 void stop (void);
@@ -11,6 +12,8 @@ void stop (void);
 void rpmMachine (void);
 //wait
 long howLong(void);
+//object
+void object_Avoidence(void);
 
 //A1 and B1 are speed
 //A2 and B2 are direction
@@ -31,7 +34,12 @@ float RPM = 0;
 
 long timer;
 
+int trigger = 4;
+int echo = 5;
+
 void setup() {
+Serial.begin(9600);
+
   attachInterrupt(digitalPinToInterrupt(speedcheck1), rpmMachine, INPUT_PULLUP);
 
   pinMode(motorSpeed1, OUTPUT);
@@ -42,36 +50,51 @@ void setup() {
   pinMode(speedcheck1, INPUT);
   pinMode(speedcheck2, INPUT);
   stop();
+
+  pinMode(trigger, OUTPUT);
+  pinMode(echo, INPUT);
+  pinMode(gripper, OUTPUT);
+
+  digitalWrite(gripper, HIGH);  
+    delay(1);
+    printf("here");
+  digitalWrite(gripper, LOW);
 }
 
 void loop() {
   howLong();
-  while (millis() <= timer + 1000){
-    motorSpeedAdjuster(motor1, .76, true);
-    motorSpeedAdjuster(motor2, .75, true);
+  while (millis() <= timer + 3000){
+    motorSpeedAdjuster(motor1, .95, true);
+    motorSpeedAdjuster(motor2, .7, true);
+    object_Avoidence();
   }
   howLong();
-  while (millis() <= timer + 1000){
-    motorSpeedAdjuster(motor1, .76, false);
-    motorSpeedAdjuster(motor2, .75, false);
-  }
-  howLong();
-  while (millis() <= timer + 1000){
-    stop();
-  }
-  howLong();
-  while (millis() <= timer + 1000){
-    motorSpeedAdjuster(motor1, .75, true);
-    motorSpeedAdjuster(motor2, .50, true);
+  while (millis() <= timer + 4000){
+    motorSpeedAdjuster(motor1, .7, false);
+    motorSpeedAdjuster(motor2, .84, false);
   }
   howLong();
   while (millis() <= timer + 1000){
     stop();
   }
   howLong();
+  while (millis() <= timer + 500){
+    motorSpeedAdjuster(motor1, 1, true);
+    motorSpeedAdjuster(motor2, 0, true);
+  }
+  howLong();
   while (millis() <= timer + 1000){
-    motorSpeedAdjuster(motor1, .50, true);
-    motorSpeedAdjuster(motor2, .75, true);
+    stop();
+  }
+  howLong();
+  while (millis() <= timer + 3000){
+    motorSpeedAdjuster(motor1, .6, true);
+    motorSpeedAdjuster(motor2, 1, true);
+  }
+  howLong();
+  while (millis() <= timer + 1000){
+    motorSpeedAdjuster(motor1, 1, true);
+    motorSpeedAdjuster(motor2, .7, false);
   }
   howLong();
   while (millis() <= timer + 1000){ 
@@ -82,16 +105,34 @@ void loop() {
 // put function definitions here:
 void motorSpeedAdjuster (int Number, float Speed, boolean Forward) {
   int AnalogSpeed = 255 * Speed;
-  
-    if(Forward){
-      analogWrite(Number, 0);
-      analogWrite(Number + 1, AnalogSpeed);
-    }
 
-    else{
-      analogWrite(Number + 1, 0);
-      analogWrite(Number, AnalogSpeed);
+  if(Speed < .6){
+    for (int sauce = 1; sauce < Speed; sauce -= .1)
+    {
+      AnalogSpeed = 255 * sauce;
+      if(Forward){
+        analogWrite(Number, 0);
+        analogWrite(Number + 1, AnalogSpeed);
+      }
+
+      else{
+        analogWrite(Number + 1, 0);
+        analogWrite(Number, AnalogSpeed);
+      }
+      howLong();
+      while (millis() <= timer + 5){}
     }
+  }
+
+  if(Forward){
+    analogWrite(Number, 0);
+    analogWrite(Number + 1, AnalogSpeed);
+  }
+
+  else{
+    analogWrite(Number + 1, 0);
+    analogWrite(Number, AnalogSpeed);
+  }
 }
 
 long howLong(void){
@@ -110,6 +151,39 @@ void stop (void){
 void rpmMachine (void){
   static long RPMTimer;
   static long RPMTimer2;
+}
 
-  
+void object_Avoidence(void){
+  int distance = 0;
+  digitalWrite(trigger, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigger, LOW);
+  distance = (.034 * pulseIn(echo, HIGH, 5900))/2;
+  if(distance < 20){
+      digitalWrite(gripper, HIGH);  
+      delay(1.5);
+      printf("there");
+      digitalWrite(gripper, LOW);
+    howLong();
+    while (millis() <= timer + 500){
+      motorSpeedAdjuster(motor1, 1, true);
+      motorSpeedAdjuster(motor2, .7, false);
+    }
+    howLong();
+    while (millis() <= timer + 1000){
+      motorSpeedAdjuster(motor1, .95, true);
+      motorSpeedAdjuster(motor2, .7, true);
+    }
+    howLong();
+    while (millis() <= timer + 500){
+      motorSpeedAdjuster(motor1, .7, false);
+      motorSpeedAdjuster(motor2, 1, false);
+    }
+    digitalWrite(gripper, HIGH);  
+      delay(1);  
+      printf("everywhere");
+    digitalWrite(gripper, LOW);
+    return;
+  }
+  return;
 }
