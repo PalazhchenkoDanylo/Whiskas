@@ -159,7 +159,10 @@ void object_Avoidence(void){
   delayMicroseconds(10);
   digitalWrite(trigger, LOW);
   distance = (.034 * pulseIn(echo, HIGH, 5900))/2;
-  if(distance < 20){
+  if (distance == 0){
+    return;
+  }
+  else if(distance < 20){
       digitalWrite(gripper, HIGH);  
       delay(1.5);
       printf("there");
