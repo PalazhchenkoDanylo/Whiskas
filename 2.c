@@ -1,291 +1,350 @@
 #include <Arduino.h>
-#include <Adafruit_NeoPixel.h> // NeoPixel library
+#include <Adafruit_NeoPixel.h>
 
+// ================================
+// NEOPIXEL
+// ================================
 #define PIN 13
 #define NUM_PIXELS 4
 Adafruit_NeoPixel pixels(NUM_PIXELS, PIN, NEO_GRB + NEO_KHZ800);
 
+// ================================
+// MOTORS
+// ================================
 const int motorPin1 = 3;
 const int motorPin2 = 5;
 const int motorPin3 = 6;
 const int motorPin4 = 9;
 
-const int servoPin = 10;
+// ================================
+// GRIPPER
+// ================================
+const int gripperPin = 10;
 
+// ================================
+// SENSORS
+// ================================
 const int sensorCount = 8;
-const int sensorPins[sensorCount] = {A0, A1, A2, A3, A4, A5, A6, A7};
+const int sensorPins[sensorCount] = {A0,A1,A2,A3,A4,A5,A6,A7};
 int sensorValues[sensorCount];
 
 const int BLACK = 900;
 
-unsigned long timeStarted = 0;
-bool timerStarted = false;
-bool raceStarted = false;
-bool raceEnded = false;
+// ================================
+// STATE
+// ================================
+bool inTurn = false;
+int lastDirection = 0; // 1=right, -1=left, 0=forward
+int rightDetectCount = 0; // счётчик обнаружения правого поворота
+int turnCommitCount = 0;  // счётчик итераций поворота (для форсирования)
 
-int celebrationStep = 0;
-unsigned long timePassed = 0;
-unsigned long timeCelebration = 0;
+// ================================
+// BLACK SQUARE DETECTION
+// ================================
+unsigned long allBlackStartTime = 0;
+const unsigned long BLACK_SQUARE_THRESHOLD = 100; // время в мс (300-500мс)
+bool finishDetected = false;
 
-//====================================//
-// ENUMS
-//====================================//
-enum LineState { LINE_NONE, LINE_LEFT, LINE_RIGHT, LINE_CENTER, LINE_T, LINE_END };
-enum TurnState { TURN_NONE, TURN_LEFT, TURN_RIGHT, TURN_AROUND };
-TurnState turnState = TURN_NONE;
-
-// ===== Function prototypes =====
-void startRace();
-void endRace();
-void startTimer();
-void moveGripper(int angle);
-
-void stopRobot();
-void lightStop();
-void moveForward();
-void moveBackwards();
-void turnRight();
-void moveRight();
-void moveLeft();
-void turnAround();
-
-void celebrate1();
-void celebrate2();
-void celebrate3();
-void celebrate4();
-
+// ================================
+// PROTOTYPES
+// ================================
 void readSensors();
-LineState readLine();
-void handleLine(LineState line);
-void handleTurn();
-void handleCelebration();
+void handleNavigation();
+void moveForward();
+void moveBackward();
+void moveLeft();
+void moveRight();
+void stopRobot();
+void startSequence();
+void finishSequence();
+void setGripperPulse(int pulseWidthMicros);
+void closeGripper();
+void openGripper();
+void Uturn();
 
-
-//====================================//
+// ================================
 // SETUP
-//====================================//
+// ================================
 void setup() {
-  pinMode(motorPin1, OUTPUT);
-  pinMode(motorPin2, OUTPUT);
-  pinMode(motorPin3, OUTPUT);
-  pinMode(motorPin4, OUTPUT);
-  pinMode(servoPin, OUTPUT);
+    pinMode(motorPin1, OUTPUT);
+    pinMode(motorPin2, OUTPUT);
+    pinMode(motorPin3, OUTPUT);
+    pinMode(motorPin4, OUTPUT);
+    pinMode(gripperPin, OUTPUT);
 
-  for(int i=0; i<sensorCount; i++) pinMode(sensorPins[i], INPUT);
+    for(int i=0; i<sensorCount; i++)
+        pinMode(sensorPins[i], INPUT);
 
-  Serial.begin(9600);
+    Serial.begin(9600);
 
-  pixels.begin();
-  pixels.show();
-  pixels.setBrightness(50);
+    pixels.begin();
+    pixels.setBrightness(40);
+    pixels.show();
 
-  delay(1000);
-  startRace();
-  startTimer();
-  moveForward();
+    startSequence();
 }
 
-//====================================//
+// ================================
 // LOOP
-//====================================//
+// ================================
 void loop() {
-  // читаем сенсоры напрямую
-  readSensors();
-
-  // если гонка закончилась, делаем анимацию
-  if(raceEnded) {
-    handleCelebration();
-    return;
-  }
-
-  // обрабатываем повороты через state-machine
-  if(turnState != TURN_NONE) {
-    handleTurn();
-    return;
-  }
-
-  // обработка линии каждый цикл
-  LineState line = readLine();
-  handleLine(line);
-}
-
-//====================================//
-// SENSOR READING
-//====================================//
-void readSensors() {
-  for(int i=0; i<sensorCount; i++){
-    sensorValues[i] = analogRead(sensorPins[i]);
-  }
-}
-
-//====================================//
-// LINE READING
-//====================================//
-LineState readLine() {
-  bool right = sensorValues[0] > BLACK || sensorValues[1] > BLACK || sensorValues[2] > BLACK;
-  bool center = sensorValues[3] > BLACK || sensorValues[4] > BLACK;
-  bool left = sensorValues[5] > BLACK || sensorValues[6] > BLACK || sensorValues[7] > BLACK;
-
-  if(left && center && right) return LINE_T;
-  if(!left && !center && !right) return LINE_END;
-  if(center) return LINE_CENTER;
-  if(left) return LINE_LEFT;
-  if(right) return LINE_RIGHT;
-
-  return LINE_NONE;
-}
-
-//====================================//
-// LINE HANDLING
-//====================================//
-void handleLine(LineState line) {
-  switch(line) {
-    case LINE_CENTER: moveForward(); break;
-    case LINE_LEFT: turnState = TURN_LEFT; break;
-    case LINE_RIGHT: turnState = TURN_RIGHT; break;
-    case LINE_T: turnState = TURN_RIGHT; break; // или по твоей логике налево
-    case LINE_END: turnState = TURN_AROUND; break;
-    default: turnState = TURN_AROUND; break;
-  }
-}
-
-//====================================//
-// TURN HANDLING
-//====================================//
-void handleTurn() {
-  switch(turnState) {
-    case TURN_LEFT: moveLeft(); break;
-    case TURN_RIGHT: moveRight(); break;
-    case TURN_AROUND: turnAround(); break;
-    default: break;
-  }
-  turnState = TURN_NONE;
-}
-
-//====================================//
-// CELEBRATION
-//====================================//
-void handleCelebration() {
-  unsigned long timeNow = millis();
-  if(timeNow - timePassed >= timeCelebration){
-    timePassed = timeNow;
-    switch(celebrationStep){
-      case 0: lightStop(); timeCelebration=2000; break;
-      case 1: celebrate1(); timeCelebration=200; break;
-      case 2: celebrate2(); timeCelebration=200; break;
-      case 3: celebrate3(); timeCelebration=200; break;
-      case 4: celebrate4(); timeCelebration=100; break;
-      case 5: stopRobot(); celebrationStep=0; return;
+    // Если финиш обнаружен - больше ничего не делаем
+    if(finishDetected) {
+        return;
     }
-    celebrationStep++;
-  }
+    
+    readSensors();
+    handleNavigation();
 }
 
-//====================================//
-// BASIC FUNCTIONS
-//====================================//
-void startRace(){ if(!raceStarted) raceStarted=true; }
-void endRace(){ raceEnded=true; }
-void startTimer(){ if(!timerStarted){ timeStarted=millis(); timerStarted=true; } }
-void moveGripper(int angle){ analogWrite(servoPin, map(angle,0,180,0,255)); }
-
-void stopRobot() {
-  digitalWrite(motorPin1, LOW);
-  digitalWrite(motorPin2, LOW);
-  digitalWrite(motorPin3, LOW);
-  digitalWrite(motorPin4, LOW);
+// ================================
+// SENSOR READ
+// ================================
+void readSensors() {
+    for(int i=0; i<sensorCount; i++)
+        sensorValues[i] = analogRead(sensorPins[i]);
 }
 
-void lightStop(){
-  for(int i=0;i<NUM_PIXELS;i++) pixels.setPixelColor(i, pixels.Color(0,255,0));
-  pixels.show();
+// ================================
+// SIMPLE RIGHT-HAND NAVIGATION
+// ================================
+void handleNavigation() {
+    // Читаем сенсоры
+    bool right  = sensorValues[0]>BLACK || sensorValues[1]>BLACK || sensorValues[2]>BLACK;
+    bool center = sensorValues[3]>BLACK || sensorValues[4]>BLACK;
+    bool left   = sensorValues[5]>BLACK || sensorValues[6]>BLACK || sensorValues[7]>BLACK;
+    
+    bool anyLine = right || center || left;
+    
+    // === ПРОВЕРКА ЧЁРНОГО КВАДРАТА (ВСЕ СЕНСОРЫ ЧЁРНЫЕ) ===
+    bool allBlack = right && center && left && 
+                    sensorValues[0]>BLACK && sensorValues[1]>BLACK && 
+                    sensorValues[2]>BLACK && sensorValues[3]>BLACK && 
+                    sensorValues[4]>BLACK && sensorValues[5]>BLACK && 
+                    sensorValues[6]>BLACK && sensorValues[7]>BLACK;
+    
+    if(allBlack) {
+        if(allBlackStartTime == 0) {
+            allBlackStartTime = millis();
+        } else if(millis() - allBlackStartTime >= BLACK_SQUARE_THRESHOLD) {
+            finishDetected = true;
+            finishSequence();
+            return;
+        }
+    } else {
+        allBlackStartTime = 0;
+    }
+    
+    // === ЕСЛИ В ПОВОРОТЕ ===
+    if(inTurn) {
+        turnCommitCount++;
+        
+        // ФОРСИРУЕМ поворот минимум 15-20 итераций (чтобы точно свернуть)
+        if(turnCommitCount < 20) {
+            // Принудительно крутимся, игнорируя сенсоры
+            if(lastDirection == 1)
+                moveRight();
+            else if(lastDirection == -1)
+                moveLeft();
+            return;
+        }
+        
+        // После 20 итераций ждём центральную линию
+        if(center && !right && !left) {
+            inTurn = false;
+            rightDetectCount = 0;
+            turnCommitCount = 0;
+            moveForward();
+            lastDirection = 0;
+        } else {
+            if(lastDirection == 1)
+                moveRight();
+            else if(lastDirection == -1)
+                moveLeft();
+        }
+        return;
+    }
+    
+    // === ОБЫЧНЫЙ РЕЖИМ - ПРАВИЛО ПРАВОЙ РУКИ ===
+    
+    // Проверяем правую сторону
+    if(right) {
+        rightDetectCount++;
+        // Фиксируем поворот после 2-3 обнаружений подряд
+        if(rightDetectCount >= 2) {
+            inTurn = true;
+            lastDirection = 1;
+            moveRight();
+            return;
+        }
+    } else {
+        rightDetectCount = 0; // сбрасываем если не видим право
+    }
+    
+    // Если справа ничего нет, едем прямо
+    if(center) {
+        moveForward();
+        lastDirection = 0;
+        return;
+    }
+    
+    // Если прямо тоже ничего, поворачиваем налево
+    if(left) {
+        inTurn = true;
+        lastDirection = -1;
+        moveLeft();
+        return;
+    }
+    
+    // Если вообще ничего не видим - разворот направо (правило правой руки)
+    if(!anyLine) {
+        Uturn();
+    }
 }
 
+// ================================
+// MOVEMENT
+// ================================
 void moveForward() {
-  analogWrite(motorPin1,235); digitalWrite(motorPin2,LOW);
-  analogWrite(motorPin3,255); digitalWrite(motorPin4,LOW);
-  pixels.clear();
-  pixels.setPixelColor(2,pixels.Color(155,255,0));
-  pixels.setPixelColor(3,pixels.Color(155,255,0));
-  pixels.show();
+    analogWrite(motorPin1, 221); digitalWrite(motorPin2, LOW);
+    analogWrite(motorPin3, 255); digitalWrite(motorPin4, LOW);
+
+    pixels.clear();
+    pixels.setPixelColor(2, pixels.Color(255, 255, 255));
+    pixels.setPixelColor(3, pixels.Color(255, 255, 255));
+    pixels.show();
 }
 
-void moveBackwards() { 
-  digitalWrite(motorPin1,LOW); analogWrite(motorPin2,210);
-  digitalWrite(motorPin3,LOW); analogWrite(motorPin4,248);
-  pixels.clear();
-  pixels.setPixelColor(0,pixels.Color(0,255,0));
-  pixels.setPixelColor(1,pixels.Color(0,255,0));
-  pixels.show();
-}
+void moveBackward() {
+    digitalWrite(motorPin1, LOW); analogWrite(motorPin2, 220);
+    digitalWrite(motorPin3, LOW); analogWrite(motorPin4, 255);
 
-void turnRight() {
-  analogWrite(motorPin1,120); digitalWrite(motorPin2,LOW);
-  digitalWrite(motorPin3,LOW); analogWrite(motorPin4,160);
-  pixels.clear();
-  pixels.setPixelColor(1,pixels.Color(155,255,0));
-  pixels.setPixelColor(2,pixels.Color(155,255,0));
-  pixels.show();
-}
-
-void moveRight() {
-  analogWrite(motorPin1,255); digitalWrite(motorPin2,LOW);
-  analogWrite(motorPin3,LOW); digitalWrite(motorPin4,LOW);
-  pixels.clear();
-  pixels.setPixelColor(2,pixels.Color(155,255,0));
-  pixels.show();
+    pixels.clear();
+    pixels.setPixelColor(0, pixels.Color(0, 255, 0));
+    pixels.setPixelColor(1, pixels.Color(0, 255, 0));
+    pixels.show();
 }
 
 void moveLeft() {
-  analogWrite(motorPin1,LOW); digitalWrite(motorPin2,LOW);
-  analogWrite(motorPin3,255); digitalWrite(motorPin4,LOW);
-  pixels.clear();
-  pixels.setPixelColor(3,pixels.Color(155,255,0));
-  pixels.show();
+    analogWrite(motorPin1, LOW);   digitalWrite(motorPin2, LOW);
+    analogWrite(motorPin3, 255); digitalWrite(motorPin4, LOW);
+
+    pixels.clear();
+    pixels.setPixelColor(3, pixels.Color(255, 0, 0));
+    pixels.show();
 }
 
-void turnAround() {
-  digitalWrite(motorPin1,LOW); analogWrite(motorPin2,170);
-  analogWrite(motorPin3,130); digitalWrite(motorPin4,LOW);
-  pixels.clear();
-  pixels.setPixelColor(0,pixels.Color(155,255,0));
-  pixels.setPixelColor(3,pixels.Color(155,255,0));
-  pixels.show();
+void moveRight() {
+    analogWrite(motorPin1, 255); digitalWrite(motorPin2, LOW);
+    analogWrite(motorPin3, LOW);   digitalWrite(motorPin4, LOW);
+
+    pixels.clear();
+    pixels.setPixelColor(2, pixels.Color(255, 0, 0));
+    pixels.show();
 }
 
-//====================================//
-// CELEBRATION PIXELS
-//====================================//
-void celebrate1(){ 
-  pixels.setPixelColor(0,pixels.Color(0,70,0));
-  pixels.setPixelColor(1,pixels.Color(0,255,0));
-  pixels.setPixelColor(2,pixels.Color(0,70,0));
-  pixels.setPixelColor(3,pixels.Color(0,70,0));
-  pixels.show();
+void Uturn() {
+    analogWrite(motorPin1, 255); digitalWrite(motorPin2, LOW);
+    digitalWrite(motorPin3, LOW); analogWrite(motorPin4, 255);
+
+    pixels.clear();
+    pixels.setPixelColor(0, pixels.Color(255, 255, 0));
+    pixels.setPixelColor(1, pixels.Color(255, 255, 0));
+    pixels.setPixelColor(2, pixels.Color(255, 255, 0));
+    pixels.setPixelColor(3, pixels.Color(255, 255, 0));
+    pixels.show();
 }
 
-void celebrate2(){ 
-  pixels.setPixelColor(0,pixels.Color(0,70,0));
-  pixels.setPixelColor(1,pixels.Color(0,70,0));
-  pixels.setPixelColor(2,pixels.Color(0,255,0));
-  pixels.setPixelColor(3,pixels.Color(0,70,0));
-  pixels.show();
+void stopRobot() {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, LOW);
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, LOW);
+    
+    pixels.clear();
+    pixels.show();
 }
 
-void celebrate3(){ 
-  pixels.setPixelColor(0,pixels.Color(0,70,0));
-  pixels.setPixelColor(1,pixels.Color(0,70,0));
-  pixels.setPixelColor(2,pixels.Color(0,70,0));
-  pixels.setPixelColor(3,pixels.Color(0,255,0));
-  pixels.show();
+// ================================
+// FINISH SEQUENCE
+// ================================
+void finishSequence() {
+    // Останавливаемся
+    stopRobot();
+    delay(300);
+    
+    // Мигаем всеми светодиодами (финиш!)
+    for(int i=0; i<3; i++) {
+        pixels.fill(pixels.Color(255, 0, 0));
+        pixels.show();
+        delay(200);
+        pixels.clear();
+        pixels.show();
+        delay(200);
+    }
+    
+    moveLeft();
+    delay(175);
+    
+    stopRobot();
+    delay(300);
+
+    // Открываем грипер - оставляем груз
+    openGripper();
+    delay(500);
+    
+    // Отъезжаем назад
+    moveBackward();
+    delay(2000); // едем назад 1 секунду
+    
+    // Останавливаемся
+    stopRobot();
+    
+    // Финальная индикация - синий цвет (завершено)
+    pixels.fill(pixels.Color(0, 0, 255));
+    pixels.show();
 }
 
-void celebrate4(){ 
-  pixels.setPixelColor(0,pixels.Color(0,255,0));
-  pixels.setPixelColor(1,pixels.Color(0,70,0));
-  pixels.setPixelColor(2,pixels.Color(0,70,0));
-  pixels.setPixelColor(3,pixels.Color(0,70,0));
-  pixels.show();
+// ================================
+// GRIPPER
+// ================================
+void setGripperPulse(int pulseWidthMicros) {
+    for(int i = 0; i < 25; i++) {
+        digitalWrite(gripperPin, HIGH);
+        delayMicroseconds(pulseWidthMicros);
+        digitalWrite(gripperPin, LOW);
+        delayMicroseconds(20000 - pulseWidthMicros);
+    }
 }
 
-// test
+void closeGripper() {
+    setGripperPulse(1100);
+}
+
+void openGripper() {
+    setGripperPulse(1900);
+}
+
+// ================================
+// START SEQUENCE
+// ================================
+void startSequence() {
+    delay(2000);
+
+    moveForward();
+    delay(750);
+    stopRobot();
+    delay(500);
+
+    closeGripper();
+
+    moveForward();
+    delay(250);
+    stopRobot();
+
+    moveLeft();
+    delay(750);
+    stopRobot();
+
+    moveForward();
+}
